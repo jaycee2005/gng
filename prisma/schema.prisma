@@ -1,0 +1,382 @@
+// Prisma Schema for G&G Manpower & Professional Services
+// Database: PostgreSQL (compatible with Neon / Vercel Postgres / Supabase)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DATABASE_URL_UNPOOLED")
+}
+
+// =============================================
+// USER & AUTH
+// =============================================
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  passwordHash  String
+  firstName     String
+  lastName      String
+  phone         String?
+  accountStatus String    @default("ACTIVE") // ACTIVE, DISABLED, SUSPENDED
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // Relations
+  roles            UserRole[]
+  applicantProfile ApplicantProfile?
+  employerContact  EmployerContact?
+  auditEvents      AuditEvent[]       @relation("AuditUser")
+  statusChanges    StatusChange[]     @relation("ChangedByUser")
+  assignments      Assignment[]       @relation("AssignedByUser")
+  candidateShares  CandidateShare[]   @relation("SharedByUser")
+  sessions         Session[]
+  smsConsent       SmsConsent?
+
+  @@index([email])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  userId       String
+  token        String   @unique
+  expiresAt    DateTime
+  createdAt    DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([token])
+  @@index([userId])
+}
+
+// =============================================
+// ROLES & PERMISSIONS
+// =============================================
+
+model Role {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  description String?
+  portal      String   // ADMIN, APPLICANT, EMPLOYER
+  createdAt   DateTime @default(now())
+
+  permissions RolePermission[]
+  userRoles   UserRole[]
+}
+
+model Permission {
+  id          String @id @default(cuid())
+  name        String @unique
+  description String?
+  resource    String
+  action      String
+
+  rolePermissions RolePermission[]
+
+  @@unique([resource, action])
+}
+
+model RolePermission {
+  id           String @id @default(cuid())
+  roleId       String
+  permissionId String
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, permissionId])
+}
+
+model UserRole {
+  id     String @id @default(cuid())
+  userId String
+  roleId String
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, roleId])
+}
+
+// =============================================
+// APPLICANT
+// =============================================
+
+model ApplicantProfile {
+  id              String   @id @default(cuid())
+  userId          String   @unique
+  summary         String?
+  skills          String?  // JSON array stored as string
+  experience      String?  // JSON array stored as string
+  qualifications  String?  // JSON array stored as string
+  resumeUrl       String?
+  availability    String?
+  preferredRole   String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  user            User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  applications    Application[]
+  assignments     Assignment[]
+  candidateShares CandidateShare[]
+}
+
+// =============================================
+// EMPLOYER
+// =============================================
+
+model EmployerOrganization {
+  id          String   @id @default(cuid())
+  name        String
+  industry    String?
+  website     String?
+  address     String?
+  phone       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  contacts EmployerContact[]
+  requests EmployerRequest[]
+}
+
+model EmployerContact {
+  id             String   @id @default(cuid())
+  userId         String   @unique
+  organizationId String
+  jobTitle       String?
+  isPrimary      Boolean  @default(false)
+  createdAt      DateTime @default(now())
+
+  user         User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization EmployerOrganization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+}
+
+// =============================================
+// EMPLOYER REQUESTS
+// =============================================
+
+model EmployerRequest {
+  id             String    @id @default(cuid())
+  organizationId String
+  title          String
+  description    String
+  requirements   String?   // JSON stored as string
+  positions      Int       @default(1)
+  urgency        String    @default("NORMAL") // LOW, NORMAL, HIGH, URGENT
+  status         String    @default("SUBMITTED") // SUBMITTED, UNDER_REVIEW, APPROVED, IN_PROGRESS, FILLED, CANCELLED, CLOSED
+  startDate      DateTime?
+  endDate        DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  organization    EmployerOrganization @relation(fields: [organizationId], references: [id])
+  applications    Application[]
+  assignments     Assignment[]
+  candidateShares CandidateShare[]
+  statusChanges   StatusChange[]
+
+  @@index([organizationId])
+  @@index([status])
+}
+
+// =============================================
+// APPLICATIONS
+// =============================================
+
+model Application {
+  id          String   @id @default(cuid())
+  applicantId String
+  requestId   String
+  coverLetter String?
+  status      String   @default("SUBMITTED") // SUBMITTED, SCREENING, SHORTLISTED, INTERVIEW, OFFERED, ACCEPTED, REJECTED, WITHDRAWN
+  notes       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  applicant     ApplicantProfile @relation(fields: [applicantId], references: [id])
+  request       EmployerRequest  @relation(fields: [requestId], references: [id])
+  statusChanges StatusChange[]
+
+  @@unique([applicantId, requestId])
+  @@index([status])
+}
+
+// =============================================
+// CANDIDATE SHARING
+// =============================================
+
+model CandidateShare {
+  id          String    @id @default(cuid())
+  applicantId String
+  requestId   String
+  sharedById  String
+  sharedInfo  String?   // JSON describing what info was shared
+  response    String?   // Employer's response
+  respondedAt DateTime?
+  createdAt   DateTime  @default(now())
+
+  applicant ApplicantProfile @relation(fields: [applicantId], references: [id])
+  request   EmployerRequest  @relation(fields: [requestId], references: [id])
+  sharedBy  User             @relation("SharedByUser", fields: [sharedById], references: [id])
+
+  @@unique([applicantId, requestId])
+}
+
+// =============================================
+// ASSIGNMENTS / DISPATCH
+// =============================================
+
+model Assignment {
+  id           String    @id @default(cuid())
+  applicantId  String
+  requestId    String
+  assignedById String
+  status       String    @default("PLANNED") // PLANNED, DISPATCHED, ACTIVE, COMPLETED, CANCELLED
+  startDate    DateTime?
+  endDate      DateTime?
+  instructions String?
+  notes        String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  applicant     ApplicantProfile       @relation(fields: [applicantId], references: [id])
+  request       EmployerRequest        @relation(fields: [requestId], references: [id])
+  assignedBy    User                   @relation("AssignedByUser", fields: [assignedById], references: [id])
+  statusChanges StatusChange[]
+  notifications NotificationDelivery[]
+
+  @@index([status])
+}
+
+// =============================================
+// STATUS CHANGE HISTORY
+// =============================================
+
+model StatusChange {
+  id            String   @id @default(cuid())
+  entityType    String   // 'Request', 'Application', 'Assignment'
+  entityId      String
+  fromStatus    String?
+  toStatus      String
+  changedById   String
+  reason        String?
+  createdAt     DateTime @default(now())
+
+  changedBy     User              @relation("ChangedByUser", fields: [changedById], references: [id])
+  request       EmployerRequest?  @relation(fields: [requestId], references: [id])
+  requestId     String?
+  application   Application?      @relation(fields: [applicationId], references: [id])
+  applicationId String?
+  assignment    Assignment?       @relation(fields: [assignmentId], references: [id])
+  assignmentId  String?
+
+  @@index([entityType, entityId])
+  @@index([createdAt])
+}
+
+// =============================================
+// SMS CONSENT & NOTIFICATIONS
+// =============================================
+
+model SmsConsent {
+  id            String    @id @default(cuid())
+  userId        String    @unique
+  phoneNumber   String    // the number this consent applies to (E.164)
+  consentStatus String    @default("OPTED_IN") // OPTED_IN, OPTED_OUT
+  consentMethod String?   // 'web_form', 'sms_keyword', ...
+  consentAt     DateTime  @default(now())
+  optOutAt      DateTime?
+  optOutMethod  String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([phoneNumber])
+}
+
+model NotificationRule {
+  id            String   @id @default(cuid())
+  name          String   @unique
+  eventType     String   // 'assignment_created', 'status_changed', etc.
+  recipientRole String   // 'applicant', 'employer', 'staff'
+  templateId    String
+  isEnabled     Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  template   NotificationTemplate   @relation(fields: [templateId], references: [id])
+  deliveries NotificationDelivery[]
+
+  @@index([eventType])
+}
+
+model NotificationTemplate {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  body      String   // Template with {{placeholders}}
+  version   Int      @default(1)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  rules NotificationRule[]
+}
+
+model NotificationDelivery {
+  id                String    @id @default(cuid())
+  ruleId            String
+  eventKey          String    // identifies one occurrence of an event, used for dedup
+  assignmentId      String?
+  recipientPhone    String
+  recipientUserId   String?
+  messageBody       String
+  templateVersion   Int
+  status            String    @default("QUEUED") // QUEUED, SENDING, SENT, DELIVERED, FAILED, SUPPRESSED
+  attempts          Int       @default(0)
+  maxRetries        Int       @default(3)
+  nextAttemptAt     DateTime?
+  lastAttemptAt     DateTime?
+  deliveredAt       DateTime?
+  failureReason     String?
+  suppressionReason String?
+  providerMessageId String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  rule       NotificationRule @relation(fields: [ruleId], references: [id])
+  assignment Assignment?      @relation(fields: [assignmentId], references: [id])
+
+  @@unique([ruleId, eventKey, recipientPhone])
+  @@index([recipientUserId])
+  @@index([providerMessageId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+// =============================================
+// AUDIT LOG
+// =============================================
+
+model AuditEvent {
+  id         String   @id @default(cuid())
+  userId     String?
+  action     String
+  resource   String
+  resourceId String?
+  details    String?  // JSON
+  ipAddress  String?
+  createdAt  DateTime @default(now())
+
+  user User? @relation("AuditUser", fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([action])
+  @@index([createdAt])
+}
